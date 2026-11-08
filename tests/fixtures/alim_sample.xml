@@ -1,0 +1,33 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<TABLE>
+   <ALIM>
+      <alim_code> 1000 </alim_code>
+      <alim_nom_fr> Pastis </alim_nom_fr>
+      <alim_nom_eng> Pastis (anise-flavoured spirit) </alim_nom_eng>
+      <alim_nom_sci missing=" " />
+      <alim_grp_code> 06 </alim_grp_code>
+      <alim_ssgrp_code> 0603 </alim_ssgrp_code>
+      <alim_ssssgrp_code> 060303 </alim_ssssgrp_code>
+      <facteur_Jones> 6.25 </facteur_Jones>
+   </ALIM>
+   <ALIM>
+      <alim_code> 2013 </alim_code>
+      <alim_nom_fr> Jus d&apos;orange, frais </alim_nom_fr>
+      <alim_nom_eng> Orange juice, fresh </alim_nom_eng>
+      <alim_nom_sci missing=" " />
+      <alim_grp_code> 06 </alim_grp_code>
+      <alim_ssgrp_code> 0602 </alim_ssgrp_code>
+      <alim_ssssgrp_code> 060201 </alim_ssssgrp_code>
+      <facteur_Jones> 6.25 </facteur_Jones>
+   </ALIM>
+   <ALIM>
+      <alim_code> 17270 </alim_code>
+      <alim_nom_fr> Huile d&apos;olive vierge extra </alim_nom_fr>
+      <alim_nom_eng> Olive oil, extra virgin </alim_nom_eng>
+      <alim_nom_sci missing=" " />
+      <alim_grp_code> 09 </alim_grp_code>
+      <alim_ssgrp_code> 0902 </alim_ssgrp_code>
+      <alim_ssssgrp_code> 000000 </alim_ssssgrp_code>
+      <facteur_Jones> 6.25 </facteur_Jones>
+   </ALIM>
+</TABLE>
