@@ -20,7 +20,7 @@ afterEach(async () => {
   await db.delete();
 });
 
-const RIZ = { name: 'Riz', kcal_100g: 350, prot_100g: 7, carb_100g: 78, fat_100g: 1, is_unit_item: false };
+const RIZ = { name: 'Riz', kcal_100g: 350, prot_100g: 7, carb_100g: 78, fat_100g: 1 };
 
 async function setup() {
   const riz = await repos.foods.create(RIZ);
@@ -31,17 +31,17 @@ async function setup() {
 }
 
 describe('schéma Dexie', () => {
-  it('ouvre la version 1 avec les tables attendues', () => {
-    expect(db.verno).toBe(1);
+  it('ouvre la version 2 avec les tables attendues', () => {
+    expect(db.verno).toBe(2);
     expect(db.tables.map((t) => t.name).sort()).toEqual(
-      ['days', 'foods', 'phases', 'recipeVersions', 'recipes', 'settings', 'templates'].sort(),
+      ['days', 'foods', 'phases', 'recipeDrafts', 'recipeVersions', 'recipes', 'settings', 'templates'].sort(),
     );
   });
 });
 
 describe('aliments', () => {
   it('Ciqual copié à la première utilisation, une seule fois', async () => {
-    const c = { code: '17270', name: "Huile d'olive vierge extra", norm: '', kcal: 899, prot: 0.25, carb: null, fat: 99.9, flags: 4 };
+    const c = { code: '17270', name: "Huile d'olive vierge extra", norm: '', kcal: 899, prot: 0.25, carb: null, fat: 99.9, flags: 4, ssgrp: '0902' };
     const a = await repos.foods.fromCiqual(c);
     const b = await repos.foods.fromCiqual({ ...c, kcal: 1 });
     expect(b.id).toBe(a.id);

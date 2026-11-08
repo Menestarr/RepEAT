@@ -36,7 +36,7 @@
 <h2>Mes aliments</h2>
 <div class="field">
   <label for="fq">Filtrer</label>
-  <input id="fq" type="search" bind:value={query} autocomplete="off" />
+  <input id="fq" type="search" bind:value={query} autocomplete="off" autocorrect="off" spellcheck="false" />
 </div>
 <label class="check"><input type="checkbox" bind:checked={showArchived} /> Afficher les aliments archivés</label>
 

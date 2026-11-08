@@ -10,7 +10,14 @@
     onpick,
     label = 'Ajouter un aliment',
     exclude = [],
-  }: { onpick: (food: Food) => void; label?: string; exclude?: string[] } = $props();
+    oncreate,
+  }: {
+    onpick: (food: Food) => void;
+    label?: string;
+    exclude?: string[];
+    /** Si fourni, affiche « Créer un aliment personnalisé » (l'appelant gère la navigation et le retour). */
+    oncreate?: () => void;
+  } = $props();
 
   let query = $state('');
   let local = $state<Food[]>([]);
@@ -58,7 +65,7 @@
 
 <div class="picker">
   <label for="food-q">{label}</label>
-  <input id="food-q" type="search" placeholder="Rechercher (mes aliments et Ciqual)" bind:value={query} autocomplete="off" />
+  <input id="food-q" type="search" placeholder="Rechercher (mes aliments et Ciqual)" bind:value={query} autocomplete="off" autocorrect="off" spellcheck="false" />
   {#if local.length > 0 || ciqual.length > 0 || ciqualError}
     <ul class="list results card">
       {#each local as f (f.id)}
@@ -88,6 +95,9 @@
       {#if ciqualError}<li class="small muted">{ciqualError}</li>{/if}
     </ul>
   {/if}
+  {#if oncreate}
+    <button type="button" class="ghost small create" onclick={oncreate}>+ Créer un aliment personnalisé</button>
+  {/if}
 </div>
 
 <style>
@@ -95,6 +105,9 @@
     max-height: 50vh;
     overflow-y: auto;
     padding: 0 0.5rem;
+    margin-top: 0.4rem;
+  }
+  .create {
     margin-top: 0.4rem;
   }
   .item {

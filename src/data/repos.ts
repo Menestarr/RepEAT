@@ -13,6 +13,7 @@ import type {
   Food,
   Phase,
   Recipe,
+  RecipeDraft,
   RecipeLine,
   RecipeVersion,
   Settings,
@@ -27,6 +28,8 @@ export type LineInput = { food_id: string; quantity: number; unit: RecipeLine['u
 export interface FoodRepo {
   list(opts?: ListOptions): Promise<Food[]>;
   get(id: string): Promise<Food | undefined>;
+  /** Plusieurs aliments par id (supprimés compris, avec deleted_at) ; absent = jamais existé. */
+  getMany(ids: string[]): Promise<Map<string, Food | undefined>>;
   create(draft: FoodDraft): Promise<Food>;
   /** Copie un aliment Ciqual dans la table foods à sa première utilisation (valeurs figées ensuite). */
   fromCiqual(c: CiqualFood): Promise<Food>;
@@ -35,10 +38,28 @@ export interface FoodRepo {
   outdatedRecipes(foodId: string): Promise<Recipe[]>;
 }
 
+/** Enregistrement complet de l'écran Recette : nom, catégorie et lignes. */
+export type RecipeSaveInput = {
+  /** Absent : création d'une nouvelle recette. */
+  recipeId?: string;
+  name: string;
+  category: Category;
+  lines: LineInput[];
+  /** Brouillon supprimé dans la même transaction (SPEC v1.1 §6.1). */
+  draftId?: string;
+};
+
+export type RecipeSaveResult = { recipe: Recipe; version: RecipeVersion; newVersion: boolean };
+
 export interface RecipeRepo {
   list(opts?: ListOptions): Promise<Recipe[]>;
   get(id: string): Promise<Recipe | undefined>;
   create(meta: { name: string; category: Category }, lines: LineInput[]): Promise<{ recipe: Recipe; version: RecipeVersion }>;
+  /**
+   * Crée ou met à jour une recette en une transaction : métadonnées, nouvelle version
+   * si les lignes changent, suppression du brouillon.
+   */
+  save(input: RecipeSaveInput): Promise<RecipeSaveResult>;
   updateMeta(id: string, patch: Partial<Pick<Recipe, 'name' | 'category' | 'archived'>>): Promise<Recipe>;
   /** Crée une nouvelle version immuable à partir des aliments actuels. Renvoie la version courante si rien n'a changé. */
   addVersion(recipeId: string, lines: LineInput[]): Promise<RecipeVersion>;
@@ -51,6 +72,19 @@ export interface RecipeRepo {
   getVersions(ids: string[]): Promise<Map<string, RecipeVersion>>;
   /** Nouvelles versions des recettes données avec les valeurs actuelles de l'aliment. */
   refreshFood(recipeIds: string[], foodId: string): Promise<number>;
+}
+
+/**
+ * Brouillons de l'écran Recette. Locaux à l'appareil : hors export, import et fusion.
+ * Les écritures ne déclenchent pas onChange (enregistrement à chaque frappe).
+ */
+export interface DraftRepo {
+  list(): Promise<RecipeDraft[]>;
+  get(id: string): Promise<RecipeDraft | undefined>;
+  put(draft: RecipeDraft): Promise<void>;
+  remove(id: string): Promise<void>;
+  /** Supprime les brouillons de plus de 30 jours. Renvoie le nombre supprimé. */
+  purge(): Promise<number>;
 }
 
 export interface PhaseRepo {
@@ -91,6 +125,7 @@ export interface BackupRepo {
 export type Repos = {
   foods: FoodRepo;
   recipes: RecipeRepo;
+  drafts: DraftRepo;
   phases: PhaseRepo;
   days: DayRepo;
   templates: TemplateRepo;

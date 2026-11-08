@@ -1,6 +1,11 @@
 <script lang="ts">
+  /**
+   * Quantités à peser pour N blocs, arrondies au pas de leur unité (SPEC v1.1 §5),
+   * avec l'écart d'arrondi par ingrédient et le signalement « arrondi fort ».
+   */
+  import { formatAmount, hintFor } from '../../domain/amountFormat';
   import type { PortionLine } from '../../domain/calc';
-  import { fmtInt, fmtSigned } from '../../domain/format';
+  import { fmtSigned } from '../../domain/format';
 
   let { lines, big = false }: { lines: PortionLine[]; big?: boolean } = $props();
 </script>
@@ -8,19 +13,19 @@
 <table class="data" class:big>
   <tbody>
     {#each lines as l, i (i)}
-      <tr class:zero={l.zero}>
+      {@const hint = hintFor([l.rounded], l.snapshot)}
+      {@const delta = Math.round(l.delta_kcal)}
+      <tr class:strong={l.strong}>
         <td>
           {l.name}
-          {#if l.zero}<span class="badge warn">0 à peser</span>{/if}
+          {#if l.strong}<span class="badge warn">arrondi fort</span>{/if}
         </td>
         <td class="r num">
-          {#if l.units !== null}
-            <strong>{l.units}</strong> u.
+          <strong>{formatAmount(l.rounded, l.snapshot)}</strong>
+          {#if hint || delta !== 0}
             <span class="muted small">
-              ({fmtInt(l.grams)} g{#if Math.round(l.delta_kcal) !== 0}, {fmtSigned(l.delta_kcal)} kcal{/if})
+              ({[hint, delta !== 0 ? `${fmtSigned(l.delta_kcal)} kcal` : null].filter(Boolean).join(', ')})
             </span>
-          {:else}
-            <strong>{fmtInt(l.amount)}</strong> {l.unit}
           {/if}
         </td>
       </tr>
@@ -36,7 +41,7 @@
   .big strong {
     font-size: 1.45rem;
   }
-  tr.zero td {
+  tr.strong td {
     color: var(--warn);
   }
 </style>

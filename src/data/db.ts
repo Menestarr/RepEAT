@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { Day, Food, Phase, Recipe, RecipeVersion, Template } from '../domain/types';
+import type { Day, Food, Phase, Recipe, RecipeDraft, RecipeVersion, Template } from '../domain/types';
 
 export type SettingRow = { key: string; value: unknown };
 
@@ -13,6 +13,8 @@ export class RepeatDB extends Dexie {
   days!: EntityTable<Day, 'id'>;
   templates!: EntityTable<Template, 'id'>;
   settings!: EntityTable<SettingRow, 'key'>;
+  /** v1.1 : brouillons de l'écran Recette, locaux à l'appareil (jamais exportés). */
+  recipeDrafts!: EntityTable<RecipeDraft, 'id'>;
 
   constructor(name: string = DB_NAME) {
     super(name);
@@ -25,6 +27,11 @@ export class RepeatDB extends Dexie {
       days: 'id, date',
       templates: 'id',
       settings: 'key',
+    });
+    // v1.1 : ajout d'une table, aucune donnée existante à transformer.
+    // Les champs d'unité des aliments sont optionnels : pas d'upgrade() nécessaire.
+    this.version(2).stores({
+      recipeDrafts: 'id, recipe_id, updated_at',
     });
   }
 }

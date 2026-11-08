@@ -1,8 +1,15 @@
 import { isIsoDate } from './dates';
 import type { Day, Food, Phase, Recipe, RecipeVersion, Settings, Template } from './types';
 import { CATEGORIES } from './types';
+import { UNITS } from './units';
 
-export const SCHEMA_VERSION = 1;
+/**
+ * Historique du schéma d'export :
+ * - 1 : v1 (unités g et ml).
+ * - 2 : v1.1, unités ménagères (cac, cas, u, pincee) et champs d'unité optionnels
+ *   des aliments (unit_label, unit_step, unit_indicative). Un fichier v2 est refusé par une app v1.
+ */
+export const SCHEMA_VERSION = 2;
 
 export type CatalogData = {
   foods: Food[];
@@ -46,8 +53,11 @@ export function exportFileName(type: ExportType, exportedAt: string): string {
 /** Migration d'un fichier du schéma n vers n + 1. */
 export type Migration = (file: Record<string, unknown>) => Record<string, unknown>;
 
-/** Clé = version source. Vide tant que le schéma n'a pas changé. */
-export const MIGRATIONS: Record<number, Migration> = {};
+/** Clé = version source. */
+export const MIGRATIONS: Record<number, Migration> = {
+  // 1 → 2 : uniquement des champs optionnels ajoutés, aucune transformation.
+  1: (file) => file,
+};
 
 export function migrateExport(
   raw: Record<string, unknown>,
@@ -97,7 +107,8 @@ class Checker {
     if (v === null && opts.nullable) return;
     if (typeof v !== 'number' || !Number.isFinite(v)) throw this.err(`« ${k} » doit être un nombre.`);
   }
-  bool(o: Obj, k: string) {
+  bool(o: Obj, k: string, optional = false) {
+    if (o[k] === undefined && optional) return;
     if (typeof o[k] !== 'boolean') throw this.err(`« ${k} » doit être un booléen.`);
   }
   oneOf(o: Obj, k: string, values: readonly string[]) {
@@ -129,13 +140,21 @@ function each(list: unknown[], name: string, check: (c: Checker, o: Obj) => void
 
 const MACRO_KEYS = ['kcal', 'prot', 'carb', 'fat'] as const;
 
-function checkSnapshot(c: Checker, s: unknown) {
+/** Champs d'unité communs à un aliment et à son instantané. */
+function checkUnitFields(c: Checker, o: Obj) {
+  c.num(o, 'density_g_ml', { optional: true });
+  c.num(o, 'unit_weight_g', { optional: true });
+  c.str(o, 'unit_label', true);
+  if (o.unit_step !== undefined && o.unit_step !== 0.5 && o.unit_step !== 1) throw c.err('« unit_step » doit valoir 0,5 ou 1.');
+  c.bool(o, 'is_unit_item');
+}
+
+function checkSnapshot(c: Checker, s: unknown): Obj {
   if (!isObj(s)) throw c.err('food_snapshot invalide.');
   c.str(s, 'name');
   for (const k of ['kcal_100g', 'prot_100g', 'carb_100g', 'fat_100g']) c.num(s, k, { nullable: true });
-  c.num(s, 'density_g_ml', { optional: true });
-  c.num(s, 'unit_weight_g', { optional: true });
-  c.bool(s, 'is_unit_item');
+  checkUnitFields(c, s);
+  return s;
 }
 
 function checkCatalog(d: Obj) {
@@ -148,9 +167,8 @@ function checkCatalog(d: Obj) {
     for (const k of ['kcal_100g', 'prot_100g', 'carb_100g', 'fat_100g']) c.num(o, k, { nullable: true });
     const flags = c.arr(o, 'missing_flags');
     if (!flags.every((f) => MACRO_KEYS.includes(f as (typeof MACRO_KEYS)[number]))) throw c.err('missing_flags invalide.');
-    c.num(o, 'density_g_ml', { optional: true });
-    c.num(o, 'unit_weight_g', { optional: true });
-    c.bool(o, 'is_unit_item');
+    checkUnitFields(c, o);
+    c.bool(o, 'unit_indicative', true);
     c.bool(o, 'archived');
     c.timestamps(o);
   });
@@ -167,8 +185,12 @@ function checkCatalog(d: Obj) {
       if (!isObj(l)) throw c.err('ligne invalide.');
       c.str(l, 'food_id');
       c.num(l, 'quantity');
-      c.oneOf(l, 'unit', ['g', 'ml']);
-      checkSnapshot(c, l.food_snapshot);
+      c.oneOf(l, 'unit', UNITS);
+      const s = checkSnapshot(c, l.food_snapshot);
+      // Même règle que validateLineUnit : `u` sans poids unitaire est inutilisable.
+      if (l.unit === 'u' && !(typeof s.unit_weight_g === 'number' && s.unit_weight_g > 0)) {
+        throw c.err('ligne en unités sans poids unitaire.');
+      }
     }
   });
 }

@@ -10,8 +10,11 @@ export const FLAG_PROT = 2;
 export const FLAG_CARB = 4;
 export const FLAG_FAT = 8;
 
-/** [code, nom, nom_normalisé, kcal, prot, gluc, lip, flags] */
-export type CiqualRow = [string, string, string, number | null, number | null, number | null, number | null, number];
+/**
+ * Ligne du JSON compact : [code, nom, nom_normalisé, kcal, prot, gluc, lip, flags, sous-groupe].
+ * Le sous-groupe (alim_ssgrp_code, ex. « 0204 » fruits) sert au pré-remplissage des unités (v1.1).
+ */
+export type CiqualRow = [string, string, string, number | null, number | null, number | null, number | null, number, string];
 
 export type CiqualFood = {
   code: string;
@@ -22,10 +25,12 @@ export type CiqualFood = {
   carb: number | null;
   fat: number | null;
   flags: number;
+  /** Sous-groupe Ciqual (alim_ssgrp_code). */
+  ssgrp: string;
 };
 
 export function fromRow(r: CiqualRow): CiqualFood {
-  return { code: r[0], name: r[1], norm: r[2], kcal: r[3], prot: r[4], carb: r[5], fat: r[6], flags: r[7] };
+  return { code: r[0], name: r[1], norm: r[2], kcal: r[3], prot: r[4], carb: r[5], fat: r[6], flags: r[7], ssgrp: r[8] ?? '' };
 }
 
 export function flagsToKeys(flags: number): ('kcal' | 'prot' | 'carb' | 'fat')[] {

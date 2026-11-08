@@ -50,12 +50,12 @@ describe('contraintes', () => {
     expect(validateLines([line()])).toEqual([]);
   });
   it('aliment', () => {
-    const base = { name: 'X', kcal_100g: 100, prot_100g: null, carb_100g: null, fat_100g: null, is_unit_item: false };
+    const base = { name: 'X', kcal_100g: 100, prot_100g: null, carb_100g: null, fat_100g: null };
     expect(validateFood(base)).toEqual([]);
     expect(validateFood({ ...base, name: ' ' }).length).toBe(1);
     expect(validateFood({ ...base, kcal_100g: -1 }).length).toBe(1);
-    expect(validateFood({ ...base, is_unit_item: true }).length).toBe(1);
-    expect(validateFood({ ...base, is_unit_item: true, unit_weight_g: 50 })).toEqual([]);
+    expect(validateFood({ ...base, unit_weight_g: 0 }).length).toBe(1);
+    expect(validateFood({ ...base, unit_weight_g: 50, unit_step: 0.5 })).toEqual([]);
     expect(validateFood({ ...base, density_g_ml: 0 }).length).toBe(1);
   });
   it('densité par défaut des huiles', () => {

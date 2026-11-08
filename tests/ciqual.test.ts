@@ -41,6 +41,10 @@ describe('build-ciqual sur un échantillon du XML 2025', () => {
   it('nom normalisé', () => {
     expect(byCode.get('17270')?.[2]).toBe('huile d olive vierge extra');
   });
+  it('sous-groupe Ciqual en dernière colonne (v1.1)', () => {
+    expect(byCode.get('2013')?.[8]).toBe('0602');
+    expect(fromRow(byCode.get('17270')!).ssgrp).toBe('0902');
+  });
 });
 
 describe('recherche', () => {
@@ -51,7 +55,7 @@ describe('recherche', () => {
     'Œuf, cru',
     'Bœuf, steak haché 5% MG, cru',
     'Pâté de campagne',
-  ].map((name, i) => fromRow([String(i), name, normalize(name), 100, 1, 1, 1, 0]));
+  ].map((name, i) => fromRow([String(i), name, normalize(name), 100, 1, 1, 1, 0, '']));
   const index = buildIndex(items);
   const names = (q: string) => search(index, q).map((x) => x.name);
 

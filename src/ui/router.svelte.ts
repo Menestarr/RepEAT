@@ -11,14 +11,26 @@ function parse(): Route {
 export const route: Route = $state(parse());
 
 window.addEventListener('hashchange', () => {
+  const samePath = parse().path === route.path;
   Object.assign(route, parse());
-  window.scrollTo(0, 0);
+  // Un simple changement de paramètres (ex. ?brouillon=) ne doit pas faire remonter la page.
+  if (!samePath) window.scrollTo(0, 0);
 });
 
 export function go(path: string): void {
   location.hash = '#' + path;
 }
 
+/** Comme go(), mais remplace l'entrée d'historique (le bouton Précédent l'ignore). */
+export function replace(path: string): void {
+  location.replace('#' + path);
+}
+
 export function href(path: string): string {
   return '#' + path;
+}
+
+/** Chemin courant avec ses paramètres, tel qu'à passer dans `retour`. */
+export function currentPath(): string {
+  return location.hash.replace(/^#/, '') || '/jour';
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { repos } from '../../data';
+  import { formatParts, hintFor } from '../../domain/amountFormat';
   import { aggregate, portion } from '../../domain/calc';
   import { formatDateFr } from '../../domain/dates';
   import { fmtBlocks, fmtInt, fmtSigned } from '../../domain/format';
@@ -82,25 +83,23 @@
       </div>
       <PortionTable lines={p.lines} big />
       {#if Math.round(p.delta_kcal) !== 0}
-        <p class="small muted">Écart d'arrondi des unités : {fmtSigned(p.delta_kcal)} kcal</p>
+        <p class="small muted">Écart d'arrondi : {fmtSigned(p.delta_kcal)} kcal</p>
       {/if}
     </section>
   {/each}
 
   <section class="card">
     <h2>Total par aliment</h2>
+    <!-- Somme des quantités arrondies de chaque recette, par unité (SPEC v1.1 §5.4). -->
     <table class="data big">
       <tbody>
         {#each agg as a (a.food_id)}
+          {@const hint = hintFor(a.parts, a.snapshot)}
           <tr>
             <td>{a.name}</td>
             <td class="r num">
-              {#if a.units !== null}
-                <strong>{a.units}</strong> u.
-                <span class="muted small">({fmtInt(a.grams)} g)</span>
-              {:else}
-                <strong>{fmtInt(a.amount)}</strong> {a.unit}
-              {/if}
+              <strong>{formatParts(a.parts, a.snapshot)}</strong>
+              {#if hint}<span class="muted small">({hint})</span>{/if}
             </td>
           </tr>
         {/each}

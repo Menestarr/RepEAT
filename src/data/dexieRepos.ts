@@ -2,13 +2,34 @@ import { CIQUAL_VERSION, flagsToKeys, type CiqualFood } from '../ciqual/format';
 import { nowIso } from '../domain/dates';
 import { buildExport, type FullData } from '../domain/exportFormat';
 import { planMerge, type LocalData } from '../domain/merge';
-import { snapshotOf, type Food, type RecipeLine, type RecipeVersion, type Settings } from '../domain/types';
+import { isExpired } from '../domain/drafts';
+import { snapshotOf, type Food, type Recipe, type RecipeLine, type RecipeVersion, type Settings } from '../domain/types';
+import { indicativeFields, unitDefaultsFor } from '../domain/unitDefaults';
+import { DEFAULT_UNIT_STEP, hasUnitWeight } from '../domain/units';
 import { defaultDensity, validateBlocks, validateFood, validateKcalTarget, validateLines } from '../domain/validation';
 import { currentVersion, sameLines, sortVersions } from '../domain/versions';
 import type { RepeatDB } from './db';
 import { DataError, type LineInput, type Repos } from './repos';
 
 const alive = <T extends { deleted_at?: string }>(x: T) => !x.deleted_at;
+
+/** Champs optionnels d'un aliment : une valeur `undefined` supprime la clé (JSON stable). */
+const OPTIONAL_FOOD_KEYS = ['density_g_ml', 'unit_weight_g', 'unit_label', 'unit_step', 'unit_indicative'] as const;
+
+/**
+ * Normalise un aliment avant écriture : retire les clés optionnelles vides et
+ * synchronise `is_unit_item`, dérivé du poids unitaire depuis la v1.1.
+ */
+function normalizeFood(f: Food): Food {
+  const out: Food = { ...f, is_unit_item: hasUnitWeight(f) };
+  for (const k of OPTIONAL_FOOD_KEYS) if (out[k] === undefined) delete out[k];
+  if (out.unit_label !== undefined) out.unit_label = out.unit_label.trim() || undefined;
+  if (out.unit_label === undefined) delete out.unit_label;
+  if (!out.unit_indicative) delete out.unit_indicative;
+  // Pas par défaut (1) non stocké : une seule représentation, donc un instantané stable.
+  if (out.unit_step === DEFAULT_UNIT_STEP) delete out.unit_step;
+  return out;
+}
 
 function errorMessage(e: unknown): string {
   if (e instanceof DataError) return e.message;
@@ -34,6 +55,15 @@ export function createDexieRepos(db: RepeatDB, appVersion: string, newId: () => 
     }
     notify();
     return result;
+  }
+
+  /** Écriture sans notification (brouillons : une écriture par frappe, personne n'écoute). */
+  async function quiet<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      throw new DataError(`Échec de l'enregistrement (${label}) : ${errorMessage(e)}.`);
+    }
   }
 
   function fail(msg: string | string[] | null): void {
@@ -103,25 +133,24 @@ export function createDexieRepos(db: RepeatDB, appVersion: string, newId: () => 
           .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
       },
       get: (id) => db.foods.get(id),
+      async getMany(ids) {
+        const list = await db.foods.bulkGet(ids);
+        return new Map(ids.map((id, i) => [id, list[i]]));
+      },
       async create(draft) {
         fail(validateFood(draft));
         const now = nowIso();
-        const f: Food = {
+        const f = normalizeFood({
+          ...draft,
           id: newId(),
           name: draft.name.trim(),
           source: 'custom',
-          kcal_100g: draft.kcal_100g,
-          prot_100g: draft.prot_100g,
-          carb_100g: draft.carb_100g,
-          fat_100g: draft.fat_100g,
           missing_flags: [],
-          is_unit_item: draft.is_unit_item,
+          is_unit_item: false,
           archived: false,
           created_at: now,
           updated_at: now,
-        };
-        if (draft.density_g_ml !== undefined) f.density_g_ml = draft.density_g_ml;
-        if (draft.unit_weight_g !== undefined) f.unit_weight_g = draft.unit_weight_g;
+        });
         return write('aliment', ['foods'], async () => {
           await db.foods.add(f);
           return f;
@@ -139,7 +168,9 @@ export function createDexieRepos(db: RepeatDB, appVersion: string, newId: () => 
             return existing;
           }
           const now = nowIso();
-          const f: Food = {
+          const f: Food = normalizeFood({
+            // Valeurs d'unité indicatives (avocat = 140 g, pas ½…), signalées comme telles.
+            ...indicativeFields(unitDefaultsFor({ name: c.name, ssgrp: c.ssgrp })),
             id: newId(),
             name: c.name,
             source: 'ciqual',
@@ -154,7 +185,7 @@ export function createDexieRepos(db: RepeatDB, appVersion: string, newId: () => 
             archived: false,
             created_at: now,
             updated_at: now,
-          };
+          });
           const d = defaultDensity(c.name);
           if (d !== undefined) f.density_g_ml = d;
           await db.foods.add(f);
@@ -164,10 +195,9 @@ export function createDexieRepos(db: RepeatDB, appVersion: string, newId: () => 
       update(id, patch) {
         return write('aliment', ['foods'], async () => {
           const cur = await mustGet(db.foods.get(id), 'Aliment');
-          const next: Food = { ...cur, ...patch, updated_at: nowIso() };
+          // Une clé présente à undefined dans le patch efface le champ (normalizeFood).
+          const next = normalizeFood({ ...cur, ...patch, updated_at: nowIso() });
           if (patch.name !== undefined) next.name = patch.name.trim();
-          if ('density_g_ml' in patch && patch.density_g_ml === undefined) delete next.density_g_ml;
-          if ('unit_weight_g' in patch && patch.unit_weight_g === undefined) delete next.unit_weight_g;
           fail(validateFood(next));
           await db.foods.put(next);
           return next;
@@ -195,16 +225,35 @@ export function createDexieRepos(db: RepeatDB, appVersion: string, newId: () => 
       },
       get: (id) => db.recipes.get(id),
       async create(meta, inputs) {
-        if (!meta.name.trim()) throw new DataError('Le nom de la recette est requis.');
-        return write('recette', ['recipes', 'recipeVersions', 'foods'], async () => {
-          const lines = await buildLines(inputs);
+        const { recipe, version } = await repos.recipes.save({ ...meta, lines: inputs });
+        return { recipe, version };
+      },
+      save(input) {
+        if (!input.name.trim()) throw new DataError('Le nom de la recette est requis.');
+        const name = input.name.trim();
+        return write('recette', ['recipes', 'recipeVersions', 'foods', 'recipeDrafts'], async () => {
+          const lines = await buildLines(input.lines);
           fail(validateLines(lines));
-          const now = nowIso();
-          const recipe = { id: newId(), name: meta.name.trim(), category: meta.category, archived: false, created_at: now, updated_at: now };
-          await db.recipes.add(recipe);
-          const version: RecipeVersion = { id: newId(), recipe_id: recipe.id, created_at: now, lines };
-          await db.recipeVersions.add(version);
-          return { recipe, version };
+          let result: { recipe: Recipe; version: RecipeVersion; newVersion: boolean };
+          if (input.recipeId === undefined) {
+            const now = nowIso();
+            const recipe: Recipe = { id: newId(), name, category: input.category, archived: false, created_at: now, updated_at: now };
+            await db.recipes.add(recipe);
+            const version: RecipeVersion = { id: newId(), recipe_id: recipe.id, created_at: now, lines };
+            await db.recipeVersions.add(version);
+            result = { recipe, version, newVersion: true };
+          } else {
+            const cur = await mustGet(db.recipes.get(input.recipeId), 'Recette');
+            if (cur.name !== name || cur.category !== input.category) {
+              await db.recipes.put({ ...cur, name, category: input.category, updated_at: nowIso() });
+            }
+            const before = (await versionsOf(cur.id)).at(-1);
+            const version = await insertVersion(cur.id, lines);
+            const recipe = await mustGet(db.recipes.get(cur.id), 'Recette');
+            result = { recipe, version, newVersion: version.id !== before?.id };
+          }
+          if (input.draftId !== undefined) await db.recipeDrafts.delete(input.draftId);
+          return result;
         });
       },
       updateMeta(id, patch) {
@@ -265,6 +314,25 @@ export function createDexieRepos(db: RepeatDB, appVersion: string, newId: () => 
             if (v.id !== cur.id) n++;
           }
           return n;
+        });
+      },
+    },
+
+    drafts: {
+      list: () => db.recipeDrafts.toArray(),
+      get: (id) => db.recipeDrafts.get(id),
+      async put(d) {
+        await quiet('brouillon', () => db.recipeDrafts.put(d));
+      },
+      async remove(id) {
+        await quiet('brouillon', () => db.recipeDrafts.delete(id));
+      },
+      purge() {
+        return quiet('brouillons', async () => {
+          const now = nowIso();
+          const old = (await db.recipeDrafts.toArray()).filter((d) => isExpired(d, now)).map((d) => d.id);
+          await db.recipeDrafts.bulkDelete(old);
+          return old.length;
         });
       },
     },

@@ -1,5 +1,6 @@
 import { versionTotals } from './calc';
-import type { Food, RecipeLine } from './types';
+import type { Food, RecipeLine, UnitStep } from './types';
+import { hasUnitWeight, isOilName, isUnit } from './units';
 
 const EPS = 1e-9;
 
@@ -33,6 +34,15 @@ export function foodUsableInRecipe(food: Pick<Food, 'kcal_100g' | 'name'>): stri
   return null;
 }
 
+/** L'unité `u` exige un poids unitaire dans l'instantané (SPEC v1.1 §4.4). */
+export function validateLineUnit(l: Pick<RecipeLine, 'unit' | 'food_snapshot'>): string | null {
+  if (!isUnit(l.unit)) return `${l.food_snapshot.name} : unité inconnue.`;
+  if (l.unit === 'u' && !hasUnitWeight(l.food_snapshot)) {
+    return `${l.food_snapshot.name} : pas de poids unitaire, saisissez la quantité en g.`;
+  }
+  return null;
+}
+
 export function validateLines(lines: RecipeLine[]): string[] {
   const errors: string[] = [];
   if (lines.length === 0) errors.push('La recette doit contenir au moins un ingrédient.');
@@ -41,6 +51,8 @@ export function validateLines(lines: RecipeLine[]): string[] {
     if (q) errors.push(`${l.food_snapshot.name} : ${q}`);
     const f = foodUsableInRecipe(l.food_snapshot);
     if (f) errors.push(f);
+    const u = validateLineUnit(l);
+    if (u) errors.push(u);
   }
   if (errors.length === 0 && !(versionTotals({ lines }).kcal > 0)) {
     errors.push('Le total de kcal de la recette doit être strictement positif.');
@@ -56,7 +68,9 @@ export type FoodDraft = {
   fat_100g: number | null;
   density_g_ml?: number;
   unit_weight_g?: number;
-  is_unit_item: boolean;
+  unit_label?: string;
+  unit_step?: UnitStep;
+  unit_indicative?: boolean;
 };
 
 function nonNegativeOrNull(v: number | null, label: string, errors: string[]) {
@@ -72,13 +86,12 @@ export function validateFood(d: FoodDraft): string[] {
   nonNegativeOrNull(d.fat_100g, 'Lipides', errors);
   if (d.kcal_100g !== null && d.kcal_100g > 900) errors.push('kcal : 900 kcal pour 100 g au maximum.');
   if (d.density_g_ml !== undefined && !(d.density_g_ml > 0)) errors.push('La densité doit être strictement positive.');
-  if (d.is_unit_item && !(d.unit_weight_g !== undefined && d.unit_weight_g > 0)) {
-    errors.push("Un aliment à l'unité doit avoir un poids unitaire.");
-  }
+  if (d.unit_weight_g !== undefined && !(d.unit_weight_g > 0)) errors.push("Le poids d'une unité doit être strictement positif.");
+  if (d.unit_step !== undefined && d.unit_step !== 0.5 && d.unit_step !== 1) errors.push("Le pas d'une unité vaut 0,5 ou 1.");
   return errors;
 }
 
 /** Densité pré-remplie (~0,92 pour les huiles). */
 export function defaultDensity(name: string): number | undefined {
-  return /(^|[^a-z])huiles?([^a-z]|$)/i.test(name) ? 0.92 : undefined;
+  return isOilName(name) ? 0.92 : undefined;
 }

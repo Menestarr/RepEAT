@@ -62,12 +62,16 @@ function* blocks(xml: string, tag: string): Generator<string> {
   }
 }
 
-export function parseAlim(xml: string): Map<string, string> {
-  const out = new Map<string, string>();
+export type Alim = { name: string; ssgrp: string };
+
+export function parseAlim(xml: string): Map<string, Alim> {
+  const out = new Map<string, Alim>();
   for (const b of blocks(stripBom(xml), 'ALIM')) {
     const code = field(b, 'alim_code')?.trim();
     const name = field(b, 'alim_nom_fr');
-    if (code && name) out.set(code, decodeXml(name).trim().replace(/\s+/g, ' '));
+    // Sous-groupe : « 0204 » pour les fruits ; sert au pré-remplissage des unités (v1.1).
+    const ssgrp = field(b, 'alim_ssgrp_code')?.trim() ?? '';
+    if (code && name) out.set(code, { name: decodeXml(name).trim().replace(/\s+/g, ' '), ssgrp });
   }
   return out;
 }
@@ -94,7 +98,7 @@ export function buildRows(alimXml: string, compoXml: string): CiqualRow[] {
   const names = parseAlim(alimXml);
   const compo = parseCompo(compoXml);
   const rows: CiqualRow[] = [];
-  for (const [code, name] of names) {
+  for (const [code, { name, ssgrp }] of names) {
     const c = compo.get(code) ?? {};
     const kcal = parseTeneur(c.kcal);
     const prot = parseTeneur(c.prot);
@@ -105,7 +109,7 @@ export function buildRows(alimXml: string, compoXml: string): CiqualRow[] {
       (prot.flagged ? FLAG_PROT : 0) |
       (carb.flagged ? FLAG_CARB : 0) |
       (fat.flagged ? FLAG_FAT : 0);
-    rows.push([code, name, normalize(name), kcal.value, prot.value, carb.value, fat.value, flags]);
+    rows.push([code, name, normalize(name), kcal.value, prot.value, carb.value, fat.value, flags, ssgrp]);
   }
   rows.sort((a, b) => a[1].localeCompare(b[1], 'fr'));
   return rows;

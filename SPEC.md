@@ -284,7 +284,8 @@ rounding_delta_kcal  = (units_for * unit_weight_g - grams_for) * kcal_100g / 100
 - Coefficient d'huile absorbée.
 - Planification multi-jours, liste de courses (perso ou commune).
 - Garde-fous macros, suggestions pour combler le reste.
-- Scan de code-barres (Open Food Facts), cuillères comme unité, intégration directe Google Drive.
+- Scan de code-barres (Open Food Facts), intégration directe Google Drive.
+- Unités ménagères (cuillères, unités de fruit), arrondis cohérents, brouillons de recette : voir [SPEC-v1.1.md](SPEC-v1.1.md).
 
 ## 14. Questions ouvertes
 

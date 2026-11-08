@@ -31,6 +31,8 @@
 
   onMount(async () => {
     if (blocked) return;
+    // Brouillons de recette de plus de 30 jours (SPEC v1.1 §6.4) ; un échec n'est pas bloquant.
+    void repos().drafts.purge().catch(() => undefined);
     const s = await repos().settings.get();
     if (s.persist_granted === undefined) {
       const granted = await requestPersistentStorage();

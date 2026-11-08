@@ -2,15 +2,26 @@
   import { onDestroy } from 'svelte';
   import { repos } from '../../data';
   import { CIQUAL_ATTRIBUTION } from '../../ciqual/format';
-  import { parseNumber } from '../../domain/format';
+  import { ciqualByCode } from '../../ciqual/load';
+  import { unitWeightHint } from '../../domain/amountFormat';
+  import { fmtInt, parseNumber } from '../../domain/format';
   import type { Food, MacroKey, Recipe } from '../../domain/types';
+  import { unitDefaultsFor, type UnitDefaults } from '../../domain/unitDefaults';
+  import { DEFAULT_UNIT_LABEL, tablespoonGrams } from '../../domain/units';
   import { defaultDensity, validateFood, type FoodDraft } from '../../domain/validation';
-  import { go, href } from '../router.svelte';
+  import { safeReturnPath, withParam } from '../paths';
+  import { go, href, route } from '../router.svelte';
   import { editing } from '../store.svelte';
   import { attempt, notify } from '../toast.svelte';
 
   let { id }: { id: string } = $props();
   const isNew = $derived(id === 'new');
+
+  /**
+   * Retour vers l'écran appelant (ex. la recette en cours, SPEC v1.1 §6.2).
+   * Un paramètre invalide est ignoré : on revient alors à la liste des aliments.
+   */
+  const back = $derived(safeReturnPath(route.query.get('retour')));
 
   let food = $state<Food | undefined>(undefined);
   let loaded = $state(false);
@@ -18,12 +29,26 @@
   let saving = $state(false);
   let initial = '';
 
-  let f = $state({ name: '', kcal: '', prot: '', carb: '', fat: '', density: '', unitWeight: '', isUnit: false });
+  /**
+   * Champs texte du formulaire (saisie brute, virgule acceptée).
+   * unitHalf : arrondi à la ½ unité (unit_step 0,5) ; sinon à l'unité (défaut).
+   */
+  let f = $state({ name: '', kcal: '', prot: '', carb: '', fat: '', density: '', unitWeight: '', unitLabel: '', unitHalf: false });
+
+  /**
+   * Champs d'unité au moment où ils étaient « indicatifs » (pré-remplis), ou null.
+   * Toute modification manuelle les rend différents : la mention disparaît.
+   */
+  let indicativeKey = $state<string | null>(null);
+  /** Valeurs indicatives proposées pour un aliment copié en v1 sans poids unitaire. */
+  let suggestion = $state<UnitDefaults | null>(null);
 
   let outdated = $state<Recipe[]>([]);
   let selected = $state<string[]>([]);
 
   const str = (n: number | null | undefined) => (n === null || n === undefined ? '' : String(n).replace('.', ','));
+  const unitKey = $derived(`${f.unitWeight}|${f.unitLabel}|${f.unitHalf}`);
+  const indicative = $derived(indicativeKey !== null && indicativeKey === unitKey);
 
   async function load() {
     if (id !== 'new') {
@@ -38,9 +63,12 @@
           fat: str(x.fat_100g),
           density: str(x.density_g_ml),
           unitWeight: str(x.unit_weight_g),
-          isUnit: x.is_unit_item,
+          unitLabel: x.unit_label ?? '',
+          unitHalf: x.unit_step === 0.5,
         };
+        indicativeKey = x.unit_indicative ? unitKey : null;
         await refreshOutdated();
+        void loadSuggestion(x);
       }
     }
     initial = JSON.stringify(f);
@@ -48,31 +76,58 @@
   }
   void load();
 
+  /**
+   * Aliment Ciqual copié en v1 : le pré-remplissage n'a pas joué. Le sous-groupe
+   * n'est pas stocké, on le relit dans la table embarquée par le code Ciqual.
+   * Pas de modification automatique : l'utilisateur choisit (SPEC v1.1 §4.3).
+   */
+  async function loadSuggestion(x: Food) {
+    if (x.source !== 'ciqual' || !x.ciqual_code || x.unit_weight_g !== undefined) return;
+    try {
+      const c = await ciqualByCode(x.ciqual_code);
+      const d = c ? unitDefaultsFor({ name: c.name, ssgrp: c.ssgrp }) : null;
+      suggestion = d?.unit_weight_g !== undefined ? d : null;
+    } catch {
+      suggestion = null; // table Ciqual indisponible : pas de proposition, rien de bloquant
+    }
+  }
+
+  function applySuggestion() {
+    if (!suggestion) return;
+    f.unitWeight = str(suggestion.unit_weight_g);
+    f.unitLabel = suggestion.unit_label ?? '';
+    f.unitHalf = suggestion.unit_step === 0.5;
+    indicativeKey = unitKey;
+    suggestion = null;
+  }
+
   async function refreshOutdated() {
     outdated = await repos().foods.outdatedRecipes(id);
     selected = outdated.map((r) => r.id);
   }
 
-  const draft = $derived.by((): FoodDraft => {
-    const d: FoodDraft = {
+  /** Tous les champs sont présents, à undefined si vides : l'enregistrement efface alors la valeur. */
+  const draft = $derived.by(
+    (): FoodDraft => ({
       name: f.name,
       kcal_100g: parseNumber(f.kcal),
       prot_100g: parseNumber(f.prot),
       carb_100g: parseNumber(f.carb),
       fat_100g: parseNumber(f.fat),
-      is_unit_item: f.isUnit,
-    };
-    const dens = parseNumber(f.density);
-    const uw = parseNumber(f.unitWeight);
-    if (dens !== null) d.density_g_ml = dens;
-    if (uw !== null) d.unit_weight_g = uw;
-    return d;
-  });
+      density_g_ml: parseNumber(f.density) ?? undefined,
+      unit_weight_g: parseNumber(f.unitWeight) ?? undefined,
+      unit_label: f.unitLabel.trim() || undefined,
+      unit_step: f.unitHalf ? 0.5 : undefined,
+      unit_indicative: indicative || undefined,
+    }),
+  );
   const badNumbers = $derived(
     (['kcal', 'prot', 'carb', 'fat', 'density', 'unitWeight'] as const).filter((k) => f[k].trim() !== '' && parseNumber(f[k]) === null),
   );
   const errors = $derived([...validateFood(draft), ...badNumbers.map(() => 'Une valeur numérique est invalide.').slice(0, 1)]);
   const dirty = $derived(loaded && JSON.stringify(f) !== initial);
+  /** Poids d'une c. à soupe, pour vérifier la densité (« 1 c. à soupe = 8 g »). */
+  const tbsp = $derived(tablespoonGrams({ density_g_ml: parseNumber(f.density) ?? undefined }));
 
   $effect(() => {
     editing.dirty = dirty;
@@ -90,6 +145,13 @@
     }
   }
 
+  /** Après enregistrement, retour à l'écran appelant ; un aliment créé y est ajouté (`ajout`). */
+  function returnTo(created?: Food): boolean {
+    if (!back) return false;
+    go(created ? withParam(back, 'ajout', created.id) : back);
+    return true;
+  }
+
   async function save(e: SubmitEvent) {
     e.preventDefault();
     tried = true;
@@ -101,16 +163,17 @@
         const created = await attempt(() => r.foods.create(draft), 'Aliment créé.');
         if (created) {
           editing.dirty = false;
-          go(`/aliment/${created.id}`);
+          if (!returnTo(created)) go(`/aliment/${created.id}`);
         }
         return;
       }
-      const patch = { ...draft, density_g_ml: draft.density_g_ml, unit_weight_g: draft.unit_weight_g };
-      const updated = await attempt(() => r.foods.update(id, patch), 'Aliment enregistré.');
+      const updated = await attempt(() => r.foods.update(id, draft), 'Aliment enregistré.');
       if (updated) {
         food = updated;
         initial = JSON.stringify(f);
         tried = false;
+        editing.dirty = false;
+        if (returnTo()) return;
         await refreshOutdated();
       }
     } finally {
@@ -133,7 +196,11 @@
   }
 </script>
 
-<a class="btn ghost" href={href('/aliments')}>‹ Aliments</a>
+{#if back}
+  <a class="btn ghost" href={href(back)}>‹ Retour</a>
+{:else}
+  <a class="btn ghost" href={href('/aliments')}>‹ Aliments</a>
+{/if}
 
 {#if !loaded}
   <p class="muted">Chargement…</p>
@@ -148,7 +215,8 @@
     <p class="errors">Valeur kcal manquante : complétez-la pour utiliser cet aliment dans une recette.</p>
   {/if}
 
-  {#if outdated.length > 0}
+  <!-- En retour vers une recette, le brouillon relit l'aliment à jour : pas besoin de nouvelles versions ici. -->
+  {#if outdated.length > 0 && !back}
     <div class="card warnbox">
       <h2>Recettes concernées</h2>
       <p class="small">Les versions existantes ne changent pas. Créer une nouvelle version avec les valeurs actuelles pour :</p>
@@ -162,7 +230,7 @@
   <form class="card" onsubmit={save} novalidate>
     <div class="field">
       <label for="fname">Nom</label>
-      <input id="fname" bind:value={f.name} onblur={onNameBlur} required />
+      <input id="fname" bind:value={f.name} onblur={onNameBlur} required autocomplete="off" />
     </div>
     <p class="small muted">Valeurs pour 100 g, aliment cru.</p>
     <div class="grid2">
@@ -187,14 +255,26 @@
     <div class="field">
       <label for="fdens">Densité (g/ml, vide = 1)</label>
       <input id="fdens" inputmode="decimal" bind:value={f.density} placeholder="1" />
+      <span class="small muted">1 c. à soupe = {fmtInt(tbsp)} g. Repères : farine ≈ 0,55, sucre ≈ 0,85, cacao ≈ 0,45.</span>
     </div>
-    <label class="check"><input type="checkbox" bind:checked={f.isUnit} /> Aliment à l'unité (œuf, fruit…)</label>
-    {#if f.isUnit}
+
+    <h2>À l'unité (fruit, œuf, tranche…)</h2>
+    {#if suggestion}
+      <p><button type="button" onclick={applySuggestion}>Utiliser les valeurs indicatives ({unitWeightHint(suggestion)})</button></p>
+    {/if}
+    {#if indicative}<p><span class="badge warn">valeur indicative</span></p>{/if}
+    <div class="grid2">
       <div class="field">
         <label for="fuw">Poids d'une unité (g)</label>
-        <input id="fuw" inputmode="decimal" bind:value={f.unitWeight} />
+        <input id="fuw" inputmode="decimal" bind:value={f.unitWeight} placeholder="vide = pas d'unité" />
+        <span class="small muted">Poids sans peau ni noyau.</span>
       </div>
-    {/if}
+      <div class="field">
+        <label for="ful">Libellé</label>
+        <input id="ful" bind:value={f.unitLabel} placeholder={DEFAULT_UNIT_LABEL} autocomplete="off" />
+      </div>
+    </div>
+    <label class="check"><input type="checkbox" bind:checked={f.unitHalf} /> Arrondir à la ½ unité (fruits)</label>
 
     {#if tried && errors.length}
       <ul class="errors">

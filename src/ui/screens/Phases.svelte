@@ -74,7 +74,7 @@
   <h2>{editingId ? 'Modifier la phase' : 'Nouvelle phase'}</h2>
   <div class="field">
     <label for="pname">Nom</label>
-    <input id="pname" bind:value={form.name} placeholder="Sèche, maintien…" />
+    <input id="pname" bind:value={form.name} placeholder="Sèche, maintien…" autocomplete="off" />
   </div>
   <div class="grid2">
     <div class="field">

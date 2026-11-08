@@ -1,4 +1,12 @@
+/**
+ * Calculs nutritionnels d'une recette et d'une journée.
+ * Tout est en flottants ; l'arrondi d'affichage est délégué à rounding.ts.
+ */
+import { isStrongRounding, normalizeSpoons, roundAmount } from './rounding';
 import type { FoodSnapshot, RecipeLine, RecipeVersion, Unit } from './types';
+import { toGrams, type Amount } from './units';
+
+export { densityOf } from './units';
 
 export const BLOCK_KCAL = 100;
 
@@ -10,13 +18,9 @@ export class CalcError extends Error {}
 
 type Lines = Pick<RecipeVersion, 'lines'>;
 
-export function densityOf(s: FoodSnapshot): number {
-  return s.density_g_ml !== undefined && s.density_g_ml > 0 ? s.density_g_ml : 1;
-}
-
-/** grams(line) : quantité saisie convertie en grammes. */
+/** grams(line) : quantité saisie convertie en grammes (toutes unités, voir units.toGrams). */
 export function lineGrams(line: RecipeLine): number {
-  return line.unit === 'ml' ? line.quantity * densityOf(line.food_snapshot) : line.quantity;
+  return toGrams({ unit: line.unit, value: line.quantity }, line.food_snapshot);
 }
 
 export function macrosForGrams(s: FoodSnapshot, grams: number): Macros {
@@ -61,69 +65,63 @@ export function gramsFor(v: Lines, line: RecipeLine, blocks: number): number {
   return lineGrams(line) * scaleFactor(v, blocks);
 }
 
-/** display_for(line, N) : valeur à afficher dans l'unité de saisie. */
-export function displayFor(v: Lines, line: RecipeLine, blocks: number): { amount: number; unit: Unit } {
-  const g = gramsFor(v, line, blocks);
-  return line.unit === 'ml' ? { amount: g / densityOf(line.food_snapshot), unit: 'ml' } : { amount: g, unit: 'g' };
+/**
+ * Quantité exacte (non arrondie) pour N blocs, dans l'unité de saisie de la ligne.
+ * Les cuillères sont normalisées en c. à café (voir rounding.normalizeSpoons).
+ */
+export function exactAmountFor(v: Lines, line: RecipeLine, blocks: number): Amount {
+  return normalizeSpoons({ unit: line.unit, value: line.quantity * scaleFactor(v, blocks) });
 }
 
-function unitWeight(s: FoodSnapshot): number | null {
-  return s.is_unit_item && s.unit_weight_g !== undefined && s.unit_weight_g > 0 ? s.unit_weight_g : null;
-}
-
-/** units_for(line, N) : nombre d'unités arrondi, null si l'aliment n'est pas à l'unité. */
-export function unitsFor(v: Lines, line: RecipeLine, blocks: number): number | null {
-  const uw = unitWeight(line.food_snapshot);
-  if (uw === null) return null;
-  return Math.round(gramsFor(v, line, blocks) / uw);
-}
-
-/** rounding_delta_kcal : écart dû à l'arrondi des unités (positif = plus de kcal que prévu). */
-export function roundingDeltaKcal(v: Lines, line: RecipeLine, blocks: number): number {
-  const uw = unitWeight(line.food_snapshot);
-  if (uw === null) return 0;
-  const grams = gramsFor(v, line, blocks);
-  const units = Math.round(grams / uw);
-  return ((units * uw - grams) * (line.food_snapshot.kcal_100g ?? 0)) / 100;
-}
-
+/** Une ligne du tableau des portions : quantité exacte, quantité à peser et écart en kcal. */
 export type PortionLine = {
   food_id: string;
   name: string;
+  /** Instantané de l'aliment (libellé d'unité, poids unitaire) pour l'affichage. */
+  snapshot: FoodSnapshot;
+  /** Quantité exacte pour N blocs, en unité de saisie (cuillères en c. à café). */
+  exact: Amount;
+  /** Quantité affichée, arrondie au pas de l'unité (jamais 0). */
+  rounded: Amount;
+  /** Grammes exacts (grams_for). */
   grams: number;
-  amount: number;
-  unit: Unit;
-  rounded: number;
-  units: number | null;
+  /** Grammes correspondant à la quantité arrondie. */
+  rounded_grams: number;
+  /** rounding_delta_kcal : positif = on mange plus que prévu. */
   delta_kcal: number;
-  /** L'ingrédient s'affiche à 0 (g, ml ou unités) pour ce nombre de blocs. */
-  zero: boolean;
+  /** « Arrondi fort » : la quantité arrondie dépasse l'exacte de plus de 50 %. */
+  strong: boolean;
 };
 
 export type Portion = {
   lines: PortionLine[];
+  /** Macros exactes (blocs × 100 kcal), indépendantes des arrondis. */
   macros: Macros;
+  /** Somme des écarts d'arrondi des lignes. */
   delta_kcal: number;
 };
 
+function portionLine(v: Lines, line: RecipeLine, blocks: number): PortionLine {
+  const s = line.food_snapshot;
+  const exact = exactAmountFor(v, line, blocks);
+  const rounded = roundAmount(exact, s);
+  const grams = gramsFor(v, line, blocks);
+  const roundedGrams = toGrams(rounded, s);
+  return {
+    food_id: line.food_id,
+    name: s.name,
+    snapshot: s,
+    exact,
+    rounded,
+    grams,
+    rounded_grams: roundedGrams,
+    delta_kcal: ((roundedGrams - grams) * (s.kcal_100g ?? 0)) / 100,
+    strong: isStrongRounding(exact.value, rounded.value),
+  };
+}
+
 export function portion(v: Lines, blocks: number): Portion {
-  const lines = v.lines.map((line): PortionLine => {
-    const grams = gramsFor(v, line, blocks);
-    const { amount, unit } = displayFor(v, line, blocks);
-    const units = unitsFor(v, line, blocks);
-    const rounded = Math.round(amount);
-    return {
-      food_id: line.food_id,
-      name: line.food_snapshot.name,
-      grams,
-      amount,
-      unit,
-      rounded,
-      units,
-      delta_kcal: roundingDeltaKcal(v, line, blocks),
-      zero: units !== null ? units === 0 : rounded === 0,
-    };
-  });
+  const lines = v.lines.map((line) => portionLine(v, line, blocks));
   return {
     lines,
     macros: scaleMacros(versionTotals(v), scaleFactor(v, blocks)),
@@ -131,57 +129,48 @@ export function portion(v: Lines, blocks: number): Portion {
   };
 }
 
-/** Grammes (ou ml) par bloc pour chaque ingrédient. */
+/** Quantités pour 1 bloc. */
 export function perBlock(v: Lines): PortionLine[] {
   return portion(v, 1).lines;
 }
 
+/**
+ * Total d'un aliment sur la journée (SPEC v1.1 §5.4) : somme des quantités
+ * arrondies de chaque recette, par famille d'unités, sans conversion entre familles.
+ */
 export type AggregatedLine = {
   food_id: string;
   name: string;
-  grams: number;
-  /** Total en ml si toutes les lignes de cet aliment sont saisies en ml, sinon en g. */
-  amount: number;
-  unit: Unit;
-  units: number | null;
+  snapshot: FoodSnapshot;
+  /** Un total par famille d'unités, dans l'ordre de AGGREGATE_ORDER (« 1 avocat + 60 g »). */
+  parts: Amount[];
+  rounded_grams: number;
   delta_kcal: number;
 };
 
-type Acc = AggregatedLine & { allMl: boolean; density: number };
+/** Ordre d'affichage des parts d'une ligne agrégée. Les cuillères sont en c. à café. */
+const AGGREGATE_ORDER: readonly Unit[] = ['u', 'cac', 'g', 'ml', 'pincee'];
 
 export function aggregate(items: { version: Lines; blocks: number }[]): AggregatedLine[] {
+  type Acc = Omit<AggregatedLine, 'parts'> & { totals: Map<Unit, number> };
   const map = new Map<string, Acc>();
   for (const { version, blocks } of items) {
-    const p = portion(version, blocks);
-    p.lines.forEach((pl, i) => {
-      const src = version.lines[i];
-      const density = src ? densityOf(src.food_snapshot) : 1;
-      const cur = map.get(pl.food_id);
-      if (!cur) {
-        map.set(pl.food_id, {
-          food_id: pl.food_id,
-          name: pl.name,
-          grams: pl.grams,
-          amount: 0,
-          unit: 'g',
-          units: pl.units,
-          delta_kcal: pl.delta_kcal,
-          allMl: pl.unit === 'ml',
-          density,
-        });
-      } else {
-        cur.grams += pl.grams;
-        cur.allMl = cur.allMl && pl.unit === 'ml';
-        cur.units = cur.units === null || pl.units === null ? null : cur.units + pl.units;
-        cur.delta_kcal += pl.delta_kcal;
+    for (const pl of portion(version, blocks).lines) {
+      let acc = map.get(pl.food_id);
+      if (!acc) {
+        acc = { food_id: pl.food_id, name: pl.name, snapshot: pl.snapshot, totals: new Map(), rounded_grams: 0, delta_kcal: 0 };
+        map.set(pl.food_id, acc);
       }
-    });
+      // rounded est déjà normalisé (cuillères en cac) : une clé par famille.
+      acc.totals.set(pl.rounded.unit, (acc.totals.get(pl.rounded.unit) ?? 0) + pl.rounded.value);
+      acc.rounded_grams += pl.rounded_grams;
+      acc.delta_kcal += pl.delta_kcal;
+    }
   }
   return [...map.values()]
-    .map(({ allMl, density, ...a }): AggregatedLine => ({
+    .map(({ totals, ...a }): AggregatedLine => ({
       ...a,
-      unit: allMl ? 'ml' : 'g',
-      amount: allMl ? a.grams / density : a.grams,
+      parts: AGGREGATE_ORDER.filter((u) => totals.has(u)).map((u) => ({ unit: u, value: totals.get(u)! })),
     }))
     .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
 }
@@ -194,6 +183,7 @@ export type DaySummary = {
   total_blocks: number;
   remaining_blocks: number;
   macros: Macros;
+  /** Écart total d'arrondi, informatif : le reste en blocs n'en tient pas compte. */
   delta_kcal: number;
   done: boolean;
 };

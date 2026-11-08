@@ -2,6 +2,7 @@
   import { repos } from '../../data';
   import { daySummary, versionTotals } from '../../domain/calc';
   import { addDays, formatDateFr, isIsoDate, todayLocal } from '../../domain/dates';
+  import { DEFAULT_ADD_KCAL, fillRemaining, type KcalInput } from '../../domain/dayInput';
   import { fmtBlocks, fmtInt, fmtSigned } from '../../domain/format';
   import { normalize } from '../../ciqual/format';
   import {
@@ -16,7 +17,8 @@
   import { activePhase } from '../../domain/versions';
   import { go, href, route } from '../router.svelte';
   import { data } from '../store.svelte';
-  import { attempt } from '../toast.svelte';
+  import KcalField from '../components/KcalField.svelte';
+  import { attempt, notify } from '../toast.svelte';
 
   const date = $derived.by(() => {
     const q = route.query.get('date');
@@ -130,23 +132,42 @@
     }
   }
 
-  function changeBlocks(recipeId: string, delta: number) {
+  /**
+   * Fixe les blocs d'une recette dans la journée : `next` reçoit les blocs actuels
+   * (0 si absente) et renvoie la nouvelle valeur ; ≤ 0 retire la recette.
+   * Une recette absente est ajoutée dans sa version courante.
+   */
+  function updateBlocks(recipeId: string, next: (current: number) => number) {
     const entries = [...(day?.entries ?? [])].map((e) => ({ ...e }));
     const idx = entries.findIndex((e) => dayVersions.get(e.recipe_version_id)?.recipe_id === recipeId);
+    const n = Math.round(next(idx >= 0 ? entries[idx]!.blocks : 0) * 2) / 2;
     if (idx >= 0) {
-      const e = entries[idx]!;
-      const n = Math.round((e.blocks + delta) * 2) / 2;
       if (n <= 0) entries.splice(idx, 1);
-      else e.blocks = n;
-    } else if (delta > 0) {
-      const cur = currents.get(recipeId);
-      if (!cur) return;
-      entries.push({ recipe_version_id: cur.id, blocks: 0.5 });
-      dayVersions = new Map([...dayVersions, [cur.id, cur]]);
+      else entries[idx]!.blocks = n;
     } else {
-      return;
+      const cur = currents.get(recipeId);
+      if (n <= 0 || !cur) return;
+      entries.push({ recipe_version_id: cur.id, blocks: n });
+      dayVersions = new Map([...dayVersions, [cur.id, cur]]);
     }
     void saveEntries(entries);
+  }
+
+  /** Boutons − / + : pas d'un demi-bloc (50 kcal). */
+  function changeBlocks(recipeId: string, delta: number) {
+    updateBlocks(recipeId, (b) => b + delta);
+  }
+
+  /** Saisie directe des kcal (KcalField) ; l'arrondi au demi-bloc est signalé. */
+  function commitKcal(recipeId: string, input: Exclude<KcalInput, { kind: 'invalid' }>) {
+    if (input.kind === 'remove') return updateBlocks(recipeId, () => 0);
+    if (input.adjusted) notify(`Arrondi à ${fmtInt(input.blocks * 100)} kcal.`);
+    updateBlocks(recipeId, () => input.blocks);
+  }
+
+  /** « = reste » : la recette absorbe le reste du jour, au demi-bloc inférieur. */
+  function fillWithRemaining(recipeId: string) {
+    updateBlocks(recipeId, (b) => fillRemaining(b, summary.remaining_kcal) ?? b);
   }
 
   /** Pas de bascule silencieuse : l'utilisateur choisit de passer à la version courante. */
@@ -261,11 +282,13 @@
       <span class="kcal num">{fmtInt(summary.remaining_kcal)} kcal</span>
     </div>
   </section>
+  {#if Math.round(summary.delta_kcal) !== 0}
+    <!-- Informatif : le reste en blocs n'en tient pas compte (SPEC v1.1 §5.3). -->
+    <p class="small muted center rounding num">Arrondis : {fmtSigned(summary.delta_kcal)} kcal</p>
+  {/if}
   <p class="small muted center macros num">
     P {fmtInt(summary.macros.prot)} g · G {fmtInt(summary.macros.carb)} g · L {fmtInt(summary.macros.fat)} g
-    {#if Math.round(summary.delta_kcal) !== 0}
-      · arrondi unités {fmtSigned(summary.delta_kcal)} kcal
-    {/if}
+
     {#if phase}<br />{phase.name}{/if}
   </p>
 
@@ -300,20 +323,28 @@
       </div>
       <ul class="list">
         {#each items as i (i.entry.recipe_version_id)}
+          {@const rid = i.version.recipe_id}
+          {@const name = i.recipe?.name ?? 'Recette supprimée'}
+          {@const fill = fillRemaining(i.entry.blocks, summary.remaining_kcal)}
           <li>
             <div class="grow">
-              <div>{i.recipe?.name ?? 'Recette supprimée'}</div>
-              <div class="small muted num">{fmtInt(i.entry.blocks * 100)} kcal</div>
+              <div>{name}</div>
+              {#if !readOnly && fill !== null}
+                <button class="small fill" disabled={busy} onclick={() => fillWithRemaining(rid)} aria-label="Compléter {name} avec le reste ({fmtInt(fill * 100)} kcal)">= reste</button>
+              {/if}
               {#if !readOnly && outdated(i.version)}
                 <button class="small update" onclick={() => updateVersion(i.entry)}>Nouvelle version : mettre à jour</button>
               {/if}
             </div>
-            {#if !readOnly}
-              <button class="round" aria-label="Retirer un demi-bloc" disabled={busy} onclick={() => changeBlocks(i.version.recipe_id, -0.5)}>−</button>
-            {/if}
-            <strong class="blocks num">{fmtBlocks(i.entry.blocks)}</strong>
-            {#if !readOnly}
-              <button class="round" aria-label="Ajouter un demi-bloc" disabled={busy} onclick={() => changeBlocks(i.version.recipe_id, 0.5)}>+</button>
+            {#if readOnly}
+              <div class="ro num">
+                <strong>{fmtInt(i.entry.blocks * 100)} kcal</strong>
+                <span class="small muted">{fmtBlocks(i.entry.blocks)} blocs</span>
+              </div>
+            {:else}
+              <button class="round" aria-label="Retirer un demi-bloc" disabled={busy} onclick={() => changeBlocks(rid, -0.5)}>−</button>
+              <KcalField blocks={i.entry.blocks} label="kcal de {name}" disabled={busy} oncommit={(r) => commitKcal(rid, r)} />
+              <button class="round" aria-label="Ajouter un demi-bloc" disabled={busy} onclick={() => changeBlocks(rid, 0.5)}>+</button>
             {/if}
           </li>
         {/each}
@@ -330,7 +361,7 @@
       {#if showTemplateForm}
         <form class="row" onsubmit={saveTemplate} style="margin-top: 0.75rem">
           <label class="sr-only" for="tplname">Nom du modèle</label>
-          <input id="tplname" placeholder="Nom du modèle" bind:value={templateName} required />
+          <input id="tplname" placeholder="Nom du modèle" bind:value={templateName} required autocomplete="off" />
           <button class="primary" type="submit">OK</button>
         </form>
       {/if}
@@ -346,7 +377,7 @@
     <section>
       <div class="field">
         <label for="q">Ajouter une recette</label>
-        <input id="q" type="search" placeholder="Rechercher par nom" bind:value={query} autocomplete="off" />
+        <input id="q" type="search" placeholder="Rechercher par nom" bind:value={query} autocomplete="off" autocorrect="off" spellcheck="false" />
       </div>
       {#if groups.length === 0}
         <p class="muted">
@@ -360,14 +391,15 @@
           {#each g.recipes as r (r.id)}
             {@const n = blocksByRecipe[r.id] ?? 0}
             {@const cur = currents.get(r.id)}
+            {@const canAdd = !!phase || !!day}
             <li>
               <div class="grow">
                 <div>{r.name}</div>
                 {#if cur}<div class="small muted">{recipeKcalPerBlockInfo(cur)}</div>{/if}
               </div>
               <button class="round" aria-label="Retirer un demi-bloc de {r.name}" disabled={n === 0 || busy} onclick={() => changeBlocks(r.id, -0.5)}>−</button>
-              <strong class="blocks num" class:zero={n === 0}>{fmtBlocks(n)}</strong>
-              <button class="round" aria-label="Ajouter un demi-bloc de {r.name}" disabled={busy || !phase && !day} onclick={() => changeBlocks(r.id, 0.5)}>+</button>
+              <KcalField blocks={n} suggested={DEFAULT_ADD_KCAL} label="kcal de {r.name}" disabled={busy || !canAdd} oncommit={(x) => commitKcal(r.id, x)} />
+              <button class="round" aria-label="Ajouter un demi-bloc de {r.name}" disabled={busy || !canAdd} onclick={() => changeBlocks(r.id, 0.5)}>+</button>
             </li>
           {/each}
         </ul>
@@ -431,14 +463,17 @@
   .macros {
     margin-bottom: 1rem;
   }
-  .blocks {
-    min-width: 2.5rem;
-    text-align: center;
-    font-size: 1.15rem;
+  .rounding {
+    margin: 0 0 0.35rem;
   }
-  .blocks.zero {
-    color: var(--muted);
-    font-weight: 400;
+  .ro {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+  .fill {
+    margin-top: 0.25rem;
+    min-height: 36px;
   }
   .cat {
     margin: 1rem 0 0.4rem;
